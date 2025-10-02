@@ -1,5 +1,17 @@
 import datetime
-from sqlalchemy import Column, Integer, String, BigInteger, ForeignKey, Text, Boolean, VARCHAR
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    BigInteger,
+    ForeignKey,
+    Text,
+    Boolean,
+    VARCHAR,
+    inspect,
+    text,
+    Float,
+)
 from bot.database.main import Database
 from sqlalchemy.orm import relationship
 
@@ -82,9 +94,12 @@ class User(Database.BASE):
     language = Column(String(5), nullable=True)
     referral_id = Column(BigInteger, nullable=True)
     registration_date = Column(VARCHAR, nullable=False)
+    last_activity = Column(VARCHAR, nullable=True)
+    last_reminder_sent = Column(VARCHAR, nullable=True)
     user_operations = relationship("Operations", back_populates="user_telegram_id")
     user_unfinished_operations = relationship("UnfinishedOperations", back_populates="user_telegram_id")
     user_goods = relationship("BoughtGoods", back_populates="user_telegram_id")
+    user_pending_purchases = relationship("PendingPurchase", back_populates="user")
 
     def __init__(self, telegram_id: int, registration_date: datetime.datetime, balance: int = 0,
                  referral_id=None, role_id: int = 1, language: str | None = None,
@@ -96,6 +111,8 @@ class User(Database.BASE):
         self.referral_id = referral_id
         self.registration_date = registration_date
         self.language = language
+        self.last_activity = registration_date
+        self.last_reminder_sent = None
 
 
 class Categories(Database.BASE):
@@ -207,6 +224,41 @@ class PromoCode(Database.BASE):
         self.active = active
 
 
+class PendingPurchase(Database.BASE):
+    __tablename__ = 'pending_purchases'
+    payment_id = Column(String(500), primary_key=True, unique=True)
+    user_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False)
+    item_name = Column(String(100), nullable=False)
+    price = Column(Float, nullable=False)
+    message_id = Column(BigInteger, nullable=True)
+    user = relationship("User", back_populates="user_pending_purchases")
+
+    def __init__(self, payment_id: str, user_id: int, item_name: str, price: float, message_id: int | None = None):
+        self.payment_id = payment_id
+        self.user_id = user_id
+        self.item_name = item_name
+        self.price = price
+        self.message_id = message_id
+
+
 def register_models():
-    Database.BASE.metadata.create_all(Database().engine)
+    database = Database()
+    engine = database.engine
+    Database.BASE.metadata.create_all(engine)
+
+    inspector = inspect(engine)
+    columns = {column['name'] for column in inspector.get_columns('users')}
+
+    statements: list[str] = []
+    if 'last_activity' not in columns:
+        statements.append('ALTER TABLE users ADD COLUMN last_activity VARCHAR')
+        statements.append('UPDATE users SET last_activity = registration_date WHERE last_activity IS NULL')
+    if 'last_reminder_sent' not in columns:
+        statements.append('ALTER TABLE users ADD COLUMN last_reminder_sent VARCHAR')
+
+    if statements:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
+
     Role.insert_roles()

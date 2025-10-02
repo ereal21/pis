@@ -1,7 +1,16 @@
 import sqlalchemy.exc
 import random
-from bot.database.models import User, ItemValues, Goods, Categories, BoughtGoods, \
-    Operations, UnfinishedOperations, PromoCode
+from bot.database.models import (
+    User,
+    ItemValues,
+    Goods,
+    Categories,
+    BoughtGoods,
+    Operations,
+    UnfinishedOperations,
+    PromoCode,
+    PendingPurchase,
+)
 from bot.database import Database
 
 
@@ -10,8 +19,14 @@ def create_user(telegram_id: int, registration_date, referral_id, role: int = 1,
     session = Database().session
     try:
         user = session.query(User).filter(User.telegram_id == telegram_id).one()
+        updated = False
         if user.username != username:
             user.username = username
+            updated = True
+        if not user.last_activity:
+            user.last_activity = registration_date
+            updated = True
+        if updated:
             session.commit()
     except sqlalchemy.exc.NoResultFound:
         if referral_id != '':
@@ -64,6 +79,16 @@ def start_operation(user_id: int, value: int, operation_id: str, message_id: int
     session = Database().session
     session.add(
         UnfinishedOperations(user_id=user_id, operation_value=value, operation_id=operation_id, message_id=message_id))
+    session.commit()
+
+
+def create_pending_purchase(user_id: int, payment_id: str, item_name: str, price: float,
+                            message_id: int | None = None) -> None:
+    session = Database().session
+    session.add(
+        PendingPurchase(payment_id=payment_id, user_id=user_id, item_name=item_name,
+                         price=price, message_id=message_id)
+    )
     session.commit()
 
 

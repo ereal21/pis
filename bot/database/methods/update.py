@@ -1,3 +1,5 @@
+import datetime
+
 from bot.database.models import User, ItemValues, Goods, Categories, PromoCode
 from bot.database import Database
 
@@ -20,6 +22,24 @@ def update_user_language(telegram_id: int, language: str) -> None:
     Database().session.query(User).filter(User.telegram_id == telegram_id).update(
         values={User.language: language})
     Database().session.commit()
+
+
+def update_last_activity(telegram_id: int, timestamp: str | None = None) -> None:
+    session = Database().session
+    if timestamp is None:
+        timestamp = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    session.query(User).filter(User.telegram_id == telegram_id).update(
+        values={User.last_activity: timestamp, User.last_reminder_sent: None}
+    )
+    session.commit()
+
+
+def update_last_reminder_sent(telegram_id: int, timestamp: str) -> None:
+    session = Database().session
+    session.query(User).filter(User.telegram_id == telegram_id).update(
+        values={User.last_reminder_sent: timestamp}
+    )
+    session.commit()
 
 
 def buy_item_for_balance(telegram_id: str, summ: int) -> int:

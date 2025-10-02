@@ -3,8 +3,19 @@ import datetime
 import sqlalchemy
 from sqlalchemy import exc, func
 
-from bot.database.models import Database, User, ItemValues, Goods, Categories, Role, BoughtGoods, \
-    Operations, UnfinishedOperations, PromoCode
+from bot.database.models import (
+    Database,
+    User,
+    ItemValues,
+    Goods,
+    Categories,
+    Role,
+    BoughtGoods,
+    Operations,
+    UnfinishedOperations,
+    PromoCode,
+    PendingPurchase,
+)
 
 
 def check_user(telegram_id: int) -> User | None:
@@ -334,3 +345,27 @@ def get_promocode(code: str) -> dict | None:
 
 def get_all_promocodes() -> list[PromoCode]:
     return Database().session.query(PromoCode).filter(PromoCode.active.is_(True)).all()
+
+
+def get_pending_purchase(payment_id: str) -> dict | None:
+    result = (
+        Database()
+        .session.query(
+            PendingPurchase.payment_id,
+            PendingPurchase.user_id,
+            PendingPurchase.item_name,
+            PendingPurchase.price,
+            PendingPurchase.message_id,
+        )
+        .filter(PendingPurchase.payment_id == payment_id)
+        .first()
+    )
+    if not result:
+        return None
+    return {
+        'payment_id': result.payment_id,
+        'user_id': result.user_id,
+        'item_name': result.item_name,
+        'price': result.price,
+        'message_id': result.message_id,
+    }

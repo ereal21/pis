@@ -16,7 +16,9 @@ from bot.database.methods import (
     update_balance,
     get_user_referral,
     get_user_language,
+    pop_pending_purchase,
 )
+from bot.handlers.user.main import complete_crypto_purchase
 from bot.logger_mesh import logger
 
 app = Flask(__name__)
@@ -59,7 +61,25 @@ def nowpayments_ipn():
             value = record.operation_value
             user_id = record.user_id
             message_id = record.message_id
+            pending = pop_pending_purchase(payment_id)
             finish_operation(payment_id)
+            if pending:
+                bot = Bot(token=EnvKeys.TOKEN, parse_mode="HTML")
+                lang = get_user_language(user_id) or 'en'
+                if message_id:
+                    asyncio.run(bot.delete_message(chat_id=user_id, message_id=message_id))
+                asyncio.run(
+                    complete_crypto_purchase(
+                        bot,
+                        user_id,
+                        pending['item_name'],
+                        pending['price'],
+                        lang=lang,
+                        chat_id=user_id,
+                    )
+                )
+                return "", 200
+
             formatted_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             create_operation(user_id, value, formatted_time)
             update_balance(user_id, value)
