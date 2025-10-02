@@ -7,6 +7,7 @@ from bot.misc import EnvKeys
 from bot.handlers import register_all_handlers
 from bot.database.models import register_models
 from bot.logger_mesh import logger, file_handler
+from bot.utils.inactivity import start_inactivity_reminder
 
 logger.addHandler(file_handler)
 
@@ -15,6 +16,7 @@ async def __on_start_up(dp: Dispatcher) -> None:
     register_all_filters(dp)
     register_all_handlers(dp)
     register_models()
+    start_inactivity_reminder(dp)
 
     try:
         owner_id = int(EnvKeys.OWNER_ID) if EnvKeys.OWNER_ID else None

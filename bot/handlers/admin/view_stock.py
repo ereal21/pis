@@ -32,26 +32,27 @@ async def view_stock_callback_handler(call: CallbackQuery):
     role = check_role(user_id)
     if role & Permission.OWN:
         categories = get_all_category_names()
-        lines = ['📋 Stock list']
-        for category in categories:
-            lines.append(f"\n<b>{category}</b>")
-            for sub in get_all_subcategories(category):
-                lines.append(f"  {sub}")
-                for item in get_all_item_names(sub):
+        if call.data == 'view_stock':
+            lines = ['📋 Stock list']
+            for category in categories:
+                lines.append(f"\n<b>{category}</b>")
+                for sub in get_all_subcategories(category):
+                    lines.append(f"  {sub}")
+                    for item in get_all_item_names(sub):
+                        info = get_item_info(item)
+                        count = select_item_values_amount(item)
+                        lines.append(f"    • {display_name(item)} ({info['price']:.2f}€, {count})")
+                for item in get_all_item_names(category):
                     info = get_item_info(item)
                     count = select_item_values_amount(item)
-                    lines.append(f"    • {display_name(item)} ({info['price']:.2f}€, {count})")
-            for item in get_all_item_names(category):
-                info = get_item_info(item)
-                count = select_item_values_amount(item)
-                lines.append(f"  • {display_name(item)} ({info['price']:.2f}€, {count})")
-        text = '\n'.join(lines)
-        await bot.send_message(call.message.chat.id, text, parse_mode='HTML')
+                    lines.append(f"  • {display_name(item)} ({info['price']:.2f}€, {count})")
+            text = '\n'.join(lines)
+            await bot.send_message(call.message.chat.id, text, parse_mode='HTML')
         await bot.edit_message_text(
             '📦 Choose category',
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
-            reply_markup=stock_categories_list(categories, None),
+            reply_markup=stock_categories_list(categories, 'console'),
         )
         return
     await call.answer('Insufficient rights')
@@ -67,11 +68,12 @@ async def view_stock_category_handler(call: CallbackQuery):
     subs = get_all_subcategories(category)
     if subs:
         parent = get_category_parent(category)
+        back_target = 'view_stock_root' if parent is None else f'stock_cat:{parent}'
         await bot.edit_message_text(
             '📂 Choose category',
             chat_id=call.message.chat.id,
             message_id=call.message.message_id,
-            reply_markup=stock_categories_list(subs, parent),
+            reply_markup=stock_categories_list(subs, back_target),
         )
         return
     items = get_all_item_names(category)
@@ -164,7 +166,7 @@ async def view_stock_delete_handler(call: CallbackQuery):
 
 def register_view_stock(dp: Dispatcher) -> None:
     dp.register_callback_query_handler(
-        view_stock_callback_handler, lambda c: c.data == 'view_stock'
+        view_stock_callback_handler, lambda c: c.data in {'view_stock', 'view_stock_root'}
     )
     dp.register_callback_query_handler(
         view_stock_category_handler,

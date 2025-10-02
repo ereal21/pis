@@ -1,7 +1,8 @@
 import asyncio
 from aiogram import Dispatcher
 from aiogram.types import Message, CallbackQuery
-from aiogram.utils.exceptions import BotBlocked
+from aiogram.utils.exceptions import (BotBlocked, ChatNotFound, RetryAfter,
+                                      TelegramAPIError, UserDeactivated)
 
 from bot.keyboards import back, close
 from bot.database.methods import check_role, get_all_users
@@ -28,29 +29,62 @@ async def send_message_callback_handler(call: CallbackQuery):
 async def broadcast_messages(message: Message):
     bot, user_id = await get_bot_user_ids(message)
     user_info = await bot.get_chat(user_id)
-    msg = message.text
+    msg = message.html_text or message.text or message.caption or message.html_caption
     message_id = TgConfig.STATE.get(f'{user_id}_message_id')
     TgConfig.STATE[user_id] = None
-    await bot.delete_message(chat_id=message.chat.id,
-                             message_id=message.message_id)
+    TgConfig.STATE.pop(f'{user_id}_message_id', None)
+
+    if not msg:
+        await bot.send_message(
+            chat_id=message.chat.id,
+            text='Only text announcements are supported.',
+            reply_markup=back("console")
+        )
+        return
+
+    try:
+        await bot.delete_message(chat_id=message.chat.id,
+                                 message_id=message.message_id)
+    except TelegramAPIError:
+        pass
     users = get_all_users()
-    max_users = 0
+    sent_count = 0
+    total_users = len(users)
     for user_row in users:
-        max_users += 1
-        user_id = user_row[0]
-        await asyncio.sleep(0.1)
+        target_id = int(user_row[0])
+        await asyncio.sleep(0.05)
         try:
-            await bot.send_message(chat_id=int(user_id),
+            await bot.send_message(chat_id=target_id,
                                    text=msg,
-                                   reply_markup=close())
-        except BotBlocked:
-            pass
-    await bot.edit_message_text(chat_id=message.chat.id,
-                                message_id=message_id,
-                                text='Broadcast finished',
-                                reply_markup=back("console"))
+                                   reply_markup=close(),
+                                   parse_mode='HTML')
+            sent_count += 1
+        except RetryAfter as exc:
+            await asyncio.sleep(exc.timeout)
+            try:
+                await bot.send_message(chat_id=target_id,
+                                       text=msg,
+                                       reply_markup=close(),
+                                       parse_mode='HTML')
+                sent_count += 1
+            except (BotBlocked, ChatNotFound, UserDeactivated, TelegramAPIError):
+                continue
+        except (BotBlocked, ChatNotFound, UserDeactivated):
+            continue
+        except TelegramAPIError as exc:
+            logger.warning("Failed to deliver broadcast to %s: %s", target_id, exc)
+            continue
+    if message_id:
+        await bot.edit_message_text(chat_id=message.chat.id,
+                                    message_id=message_id,
+                                    text=f'Broadcast finished. Delivered to {sent_count}/{total_users} users.',
+                                    reply_markup=back("console"))
+    else:
+        await bot.send_message(chat_id=message.chat.id,
+                               text=f'Broadcast finished. Delivered to {sent_count}/{total_users} users.',
+                               reply_markup=back("console"))
     logger.info(f"User {user_info.id} ({user_info.first_name})"
-                f" performed a broadcast. Message was sent to {max_users} users.")
+                f" performed a broadcast. Message was sent to {sent_count}/{total_users} users.")
 
 
 def register_mailing(dp: Dispatcher) -> None:
