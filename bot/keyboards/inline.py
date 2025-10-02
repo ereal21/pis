@@ -152,7 +152,8 @@ def console(role: int) -> InlineKeyboardMarkup:
 
 def confirm_purchase_menu(item_name: str, lang: str) -> InlineKeyboardMarkup:
     inline_keyboard = [
-        [InlineKeyboardButton(t(lang, 'purchase_button'), callback_data=f'buy_{item_name}')],
+        [InlineKeyboardButton(t(lang, 'pay_with_balance'), callback_data=f'buybalance_{item_name}')],
+        [InlineKeyboardButton(t(lang, 'pay_with_crypto'), callback_data=f'buycrypto_{item_name}')],
         [InlineKeyboardButton(t(lang, 'apply_promo'), callback_data=f'applypromo_{item_name}')],
         [InlineKeyboardButton('🔙 Back to menu', callback_data='back_to_menu')]
     ]
@@ -309,13 +310,12 @@ def promo_manage_actions(code: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
-def stock_categories_list(list_items: list[str], parent: str | None) -> InlineKeyboardMarkup:
+def stock_categories_list(list_items: list[str], back_callback: str) -> InlineKeyboardMarkup:
     """List categories or subcategories for stock view."""
     markup = InlineKeyboardMarkup()
     for name in list_items:
         markup.add(InlineKeyboardButton(text=name, callback_data=f'stock_cat:{name}'))
-    back_data = 'console' if parent is None else f'stock_cat:{parent}'
-    markup.add(InlineKeyboardButton('🔙 Go back', callback_data=back_data))
+    markup.add(InlineKeyboardButton('🔙 Go back', callback_data=back_callback))
     return markup
 
 
@@ -329,7 +329,7 @@ def stock_goods_list(list_items: list[str], category_name: str) -> InlineKeyboar
             callback_data=f'stock_item:{name}:{category_name}'
         ))
     parent = get_category_parent(category_name)
-    back_data = 'console' if parent is None else f'stock_cat:{parent}'
+    back_data = 'view_stock_root' if parent is None else f'stock_cat:{parent}'
     markup.add(InlineKeyboardButton('🔙 Go back', callback_data=back_data))
     return markup
 
@@ -395,6 +395,7 @@ def payment_menu(url: str, label: str, lang: str) -> InlineKeyboardMarkup:
 def crypto_invoice_menu(invoice_id: str, lang: str) -> InlineKeyboardMarkup:
     """Return markup for crypto invoice."""
     inline_keyboard = [
+        [InlineKeyboardButton('🔄 Check payment', callback_data=f'check_{invoice_id}')],
         [InlineKeyboardButton(t(lang, 'cancel_payment'), callback_data=f'cancel_{invoice_id}')],
     ]
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
@@ -408,7 +409,7 @@ def confirm_cancel(invoice_id: str, lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
-def crypto_choice() -> InlineKeyboardMarkup:
+def crypto_choice(back_data: str = 'replenish_balance') -> InlineKeyboardMarkup:
     inline_keyboard = [
         [InlineKeyboardButton('SOL', callback_data='crypto_SOL'),
          InlineKeyboardButton('BTC', callback_data='crypto_BTC')],
@@ -417,7 +418,7 @@ def crypto_choice() -> InlineKeyboardMarkup:
         [InlineKeyboardButton('USDT (TRC20)', callback_data='crypto_USDTTRC20'),
          InlineKeyboardButton('ETH', callback_data='crypto_ETH')],
         [InlineKeyboardButton('LTC', callback_data='crypto_LTC')],
-        [InlineKeyboardButton('🔙 Go back', callback_data='replenish_balance')]
+        [InlineKeyboardButton('🔙 Go back', callback_data=back_data)]
     ]
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 

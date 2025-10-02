@@ -3,8 +3,20 @@ import datetime
 import sqlalchemy
 from sqlalchemy import exc, func
 
-from bot.database.models import Database, User, ItemValues, Goods, Categories, Role, BoughtGoods, \
-    Operations, UnfinishedOperations, PromoCode
+from bot.database.models import (
+    Database,
+    User,
+    ItemValues,
+    Goods,
+    Categories,
+    Role,
+    BoughtGoods,
+    Operations,
+    UnfinishedOperations,
+    PromoCode,
+    PendingPurchase,
+)
+from bot.misc import EnvKeys
 
 
 def check_user(telegram_id: int) -> User | None:
@@ -21,9 +33,43 @@ def check_user_by_username(username: str) -> User | None:
         return None
 
 
+def _resolve_owner_id() -> int | None:
+    """Return OWNER_ID from environment as an int if possible."""
+    owner_raw = EnvKeys.OWNER_ID
+    if not owner_raw:
+        return None
+    try:
+        return int(owner_raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def get_role_id_by_name(role_name: str) -> int | None:
+    """Return the database ID for a role by name."""
+    result = Database().session.query(Role.id).filter(Role.name == role_name).first()
+    return result[0] if result else None
+
+
 def check_role(telegram_id: int) -> User | None:
-    role_id = Database().session.query(User.role_id).filter(User.telegram_id == telegram_id).one()[0]
-    return Database().session.query(Role.permissions).filter(Role.id == role_id).one()[0]
+    session = Database().session
+    result = session.query(User.role_id).filter(User.telegram_id == telegram_id).first()
+    if not result:
+        return None
+
+    role_id = result[0]
+    owner_id = _resolve_owner_id()
+    if owner_id is not None and telegram_id == owner_id:
+        owner_role_id = get_role_id_by_name('OWNER')
+        if owner_role_id and role_id != owner_role_id:
+            session.query(User).filter(User.telegram_id == telegram_id).update({User.role_id: owner_role_id})
+            session.commit()
+            role_id = owner_role_id
+        if owner_role_id:
+            perms = session.query(Role.permissions).filter(Role.id == owner_role_id).first()
+            if perms:
+                return perms[0]
+
+    return session.query(Role.permissions).filter(Role.id == role_id).one()[0]
 
 
 def check_role_name_by_id(role_id: int):
@@ -31,6 +77,10 @@ def check_role_name_by_id(role_id: int):
 
 
 def select_max_role_id() -> int:
+    """Return the owner role ID when available, otherwise highest role ID."""
+    owner_role_id = get_role_id_by_name('OWNER')
+    if owner_role_id is not None:
+        return owner_role_id
     return Database().session.query(func.max(Role.id)).scalar()
 
 
@@ -334,3 +384,27 @@ def get_promocode(code: str) -> dict | None:
 
 def get_all_promocodes() -> list[PromoCode]:
     return Database().session.query(PromoCode).filter(PromoCode.active.is_(True)).all()
+
+
+def get_pending_purchase(payment_id: str) -> dict | None:
+    result = (
+        Database()
+        .session.query(
+            PendingPurchase.payment_id,
+            PendingPurchase.user_id,
+            PendingPurchase.item_name,
+            PendingPurchase.price,
+            PendingPurchase.message_id,
+        )
+        .filter(PendingPurchase.payment_id == payment_id)
+        .first()
+    )
+    if not result:
+        return None
+    return {
+        'payment_id': result.payment_id,
+        'user_id': result.user_id,
+        'item_name': result.item_name,
+        'price': result.price,
+        'message_id': result.message_id,
+    }
