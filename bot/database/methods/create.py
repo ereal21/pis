@@ -1,4 +1,5 @@
 import sqlalchemy.exc
+from sqlalchemy import func
 import random
 from bot.database.models import (
     User,
@@ -10,13 +11,38 @@ from bot.database.models import (
     UnfinishedOperations,
     PromoCode,
     PendingPurchase,
+    Role,
 )
 from bot.database import Database
+from bot.misc import EnvKeys
+
+
+def _resolve_owner_id() -> int | None:
+    owner_raw = EnvKeys.OWNER_ID
+    if not owner_raw:
+        return None
+    try:
+        return int(owner_raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _get_owner_role_id(session) -> int | None:
+    owner_role = session.query(Role.id).filter(Role.name == 'OWNER').first()
+    if owner_role:
+        return owner_role[0]
+    return session.query(func.max(Role.id)).scalar()
 
 
 def create_user(telegram_id: int, registration_date, referral_id, role: int = 1,
                 language: str | None = None, username: str | None = None) -> None:
     session = Database().session
+    owner_id = _resolve_owner_id()
+    desired_role = role
+    if owner_id is not None and telegram_id == owner_id:
+        owner_role_id = _get_owner_role_id(session)
+        if owner_role_id is not None:
+            desired_role = owner_role_id
     try:
         user = session.query(User).filter(User.telegram_id == telegram_id).one()
         updated = False
@@ -26,17 +52,22 @@ def create_user(telegram_id: int, registration_date, referral_id, role: int = 1,
         if not user.last_activity:
             user.last_activity = registration_date
             updated = True
+        if owner_id is not None and telegram_id == owner_id:
+            owner_role_id = _get_owner_role_id(session)
+            if owner_role_id is not None and user.role_id != owner_role_id:
+                user.role_id = owner_role_id
+                updated = True
         if updated:
             session.commit()
     except sqlalchemy.exc.NoResultFound:
         if referral_id != '':
             session.add(
-                User(telegram_id=telegram_id, role_id=role, registration_date=registration_date,
+                User(telegram_id=telegram_id, role_id=desired_role, registration_date=registration_date,
                      referral_id=referral_id, language=language, username=username))
             session.commit()
         else:
             session.add(
-                User(telegram_id=telegram_id, role_id=role, registration_date=registration_date,
+                User(telegram_id=telegram_id, role_id=desired_role, registration_date=registration_date,
                      referral_id=None, language=language, username=username))
             session.commit()
 

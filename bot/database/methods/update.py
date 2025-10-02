@@ -2,12 +2,42 @@ import datetime
 
 from bot.database.models import User, ItemValues, Goods, Categories, PromoCode
 from bot.database import Database
+from bot.misc import EnvKeys
+from bot.database.methods.read import get_role_id_by_name
 
 
 def set_role(telegram_id: str, role: int) -> None:
-    Database().session.query(User).filter(User.telegram_id == telegram_id).update(
+    session = Database().session
+    owner_raw = EnvKeys.OWNER_ID
+    owner_id = None
+    if owner_raw:
+        try:
+            owner_id = int(owner_raw)
+        except (TypeError, ValueError):
+            owner_id = None
+
+    owner_role_id = get_role_id_by_name('OWNER')
+    admin_role_id = get_role_id_by_name('ADMIN')
+    target_id = None
+    try:
+        target_id = int(telegram_id)
+    except (TypeError, ValueError):
+        pass
+
+    if owner_id is not None and target_id == owner_id:
+        # Always keep the environment owner as OWNER in the database
+        if owner_role_id is not None:
+            role = owner_role_id
+    elif owner_role_id is not None and role == owner_role_id and target_id != owner_id:
+        # Prevent elevating other accounts to OWNER role
+        if admin_role_id is not None:
+            role = admin_role_id
+        else:
+            role = 1
+
+    session.query(User).filter(User.telegram_id == telegram_id).update(
         values={User.role_id: role})
-    Database().session.commit()
+    session.commit()
 
 
 def update_balance(telegram_id: int | str, summ: int) -> None:
