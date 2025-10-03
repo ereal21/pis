@@ -47,14 +47,13 @@ from bot.database.methods import (
     get_promocode,
     update_last_activity,
     create_pending_purchase,
-    pop_pending_purchase,
+    get_pending_purchase,
     delete_pending_purchase,
 )
 from bot.handlers.other import get_bot_user_ids, get_bot_info
 from bot.keyboards import (
     main_menu, categories_list, goods_list, subcategories_list, user_items_list, back, item_info,
-    profile, rules, payment_menu, close, crypto_choice, crypto_invoice_menu, confirm_cancel,
-    confirm_purchase_menu)
+    profile, rules, payment_menu, close, crypto_choice, crypto_invoice_menu, confirm_purchase_menu)
 from bot.localization import t
 from bot.logger_mesh import logger
 from bot.misc import TgConfig, EnvKeys
@@ -672,12 +671,17 @@ async def complete_crypto_purchase(
     lang: str | None = None,
     chat_id: int | None = None,
 ):
-    buyer_chat = await bot.get_chat(user_id)
-    buyer_display = (
-        f'@{buyer_chat.username}'
-        if buyer_chat.username
-        else buyer_chat.full_name
-    )
+    try:
+        buyer_chat = await bot.get_chat(user_id)
+    except Exception:
+        logger.exception("Failed to fetch chat info for user %s", user_id)
+        buyer_display = str(user_id)
+    else:
+        buyer_display = (
+            f'@{buyer_chat.username}'
+            if buyer_chat.username
+            else buyer_chat.full_name
+        )
     await perform_purchase(
         bot,
         user_id,
@@ -964,7 +968,7 @@ async def checking_payment(call: CallbackQuery):
     info = get_unfinished_operation(label)
 
     if info:
-        user_id_db, operation_value, _ = info
+        user_id_db, operation_value, stored_message_id = info
         payment_status = await check_payment_status(label)
         if payment_status is None:
             payment_status = await check_payment(label)
@@ -974,7 +978,41 @@ async def checking_payment(call: CallbackQuery):
             formatted_time = current_time.strftime("%Y-%m-%d %H:%M:%S")
             referral_id = get_user_referral(user_id)
             lang = get_user_language(user_id) or 'en'
-            pending = pop_pending_purchase(label)
+            pending = get_pending_purchase(label)
+
+            if pending:
+                invoice_message_id = pending.get('message_id') or stored_message_id or message_id
+                if invoice_message_id:
+                    try:
+                        await bot.delete_message(
+                            chat_id=call.message.chat.id,
+                            message_id=invoice_message_id,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to delete crypto invoice %s for user %s: %s",
+                            label,
+                            user_id,
+                            exc,
+                        )
+                try:
+                    await complete_crypto_purchase(
+                        bot,
+                        user_id,
+                        pending['item_name'],
+                        pending['price'],
+                        lang=lang,
+                        chat_id=call.message.chat.id,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to fulfill crypto purchase for payment %s", label
+                    )
+                    return
+                delete_pending_purchase(label)
+                finish_operation(label)
+                return
+
             finish_operation(label)
 
             if pending:
@@ -1022,38 +1060,41 @@ async def cancel_payment(call: CallbackQuery):
     bot, user_id = await get_bot_user_ids(call)
     invoice_id = call.data.split('_', 1)[1]
     lang = get_user_language(user_id) or 'en'
-    if get_unfinished_operation(invoice_id):
-        await bot.edit_message_text(
-            'Are you sure you want to cancel payment?',
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            reply_markup=confirm_cancel(invoice_id, lang),
-        )
-    else:
+    info = get_unfinished_operation(invoice_id)
+    if not info:
         await call.answer(text='❌ Invoice not found')
+        return
 
-
-async def confirm_cancel_payment(call: CallbackQuery):
-    bot, user_id = await get_bot_user_ids(call)
-    invoice_id = call.data.split('_', 2)[2]
-    lang = get_user_language(user_id) or 'en'
-    if get_unfinished_operation(invoice_id):
-        finish_operation(invoice_id)
+    pending = get_pending_purchase(invoice_id)
+    _, _, stored_message_id = info
+    finish_operation(invoice_id)
+    if pending:
         delete_pending_purchase(invoice_id)
-        role = check_role(user_id)
-        user = check_user(user_id)
-        balance = user.balance if user else 0
-        purchases = select_user_items(user_id)
-        markup = main_menu(role, TgConfig.REVIEWS_URL, TgConfig.PRICE_LIST_URL, lang)
-        text = build_menu_text(call.from_user, balance, purchases, lang)
-        await bot.edit_message_text(
-            t(lang, 'invoice_cancelled'),
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-        )
-        await bot.send_message(user_id, text, reply_markup=markup)
-    else:
-        await call.answer(text='❌ Invoice not found')
+
+    invoice_message_id = (
+        pending.get('message_id') if pending else None
+    ) or stored_message_id or call.message.message_id
+    if invoice_message_id:
+        try:
+            await bot.delete_message(
+                chat_id=call.message.chat.id,
+                message_id=invoice_message_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to delete invoice %s for user %s: %s",
+                invoice_id,
+                user_id,
+                exc,
+            )
+    role = check_role(user_id)
+    user = check_user(user_id)
+    balance = user.balance if user else 0
+    purchases = select_user_items(user_id)
+    markup = main_menu(role, TgConfig.REVIEWS_URL, TgConfig.PRICE_LIST_URL, lang)
+    text = build_menu_text(call.from_user, balance, purchases, lang)
+    await bot.send_message(user_id, t(lang, 'invoice_cancelled'))
+    await bot.send_message(user_id, text, reply_markup=markup)
 
 
 async def check_sub_to_channel(call: CallbackQuery):
@@ -1174,8 +1215,6 @@ def register_user_handlers(dp: Dispatcher):
                                        lambda c: c.data.startswith('crypto_'), state='*')
     dp.register_callback_query_handler(cancel_payment,
                                        lambda c: c.data.startswith('cancel_'), state='*')
-    dp.register_callback_query_handler(confirm_cancel_payment,
-                                       lambda c: c.data.startswith('confirm_cancel_'), state='*')
     dp.register_callback_query_handler(checking_payment,
                                        lambda c: c.data.startswith('check_'), state='*')
     dp.register_callback_query_handler(process_home_menu,

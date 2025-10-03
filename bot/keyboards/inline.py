@@ -401,14 +401,6 @@ def crypto_invoice_menu(invoice_id: str, lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
-def confirm_cancel(invoice_id: str, lang: str) -> InlineKeyboardMarkup:
-    inline_keyboard = [
-        [InlineKeyboardButton('✅ Yes', callback_data=f'confirm_cancel_{invoice_id}')],
-        [InlineKeyboardButton('🔙 Back', callback_data=f'check_{invoice_id}')],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-
-
 def crypto_choice(back_data: str = 'replenish_balance') -> InlineKeyboardMarkup:
     inline_keyboard = [
         [InlineKeyboardButton('SOL', callback_data='crypto_SOL'),
