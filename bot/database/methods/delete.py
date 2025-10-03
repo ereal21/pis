@@ -1,6 +1,14 @@
 import os
 from bot.utils.files import sanitize_name
-from bot.database.models import Database, Goods, ItemValues, Categories, UnfinishedOperations, PromoCode
+from bot.database.models import (
+    Database,
+    Goods,
+    ItemValues,
+    Categories,
+    UnfinishedOperations,
+    PromoCode,
+    PendingPurchase,
+)
 
 
 def delete_item(item_name: str) -> None:
@@ -67,3 +75,30 @@ def delete_promocode(code: str) -> None:
     session = Database().session
     session.query(PromoCode).filter(PromoCode.code == code).delete()
     session.commit()
+
+
+def delete_pending_purchase(payment_id: str) -> None:
+    session = Database().session
+    session.query(PendingPurchase).filter(PendingPurchase.payment_id == payment_id).delete()
+    session.commit()
+
+
+def pop_pending_purchase(payment_id: str) -> dict | None:
+    session = Database().session
+    pending = (
+        session.query(PendingPurchase)
+        .filter(PendingPurchase.payment_id == payment_id)
+        .first()
+    )
+    if not pending:
+        return None
+    data = {
+        'payment_id': pending.payment_id,
+        'user_id': pending.user_id,
+        'item_name': pending.item_name,
+        'price': pending.price,
+        'message_id': pending.message_id,
+    }
+    session.delete(pending)
+    session.commit()
+    return data

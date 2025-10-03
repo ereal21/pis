@@ -1,9 +1,12 @@
-from aiogram import Dispatcher, Bot
+from aiogram import Bot, Dispatcher
+
+from bot.database.methods import update_last_activity
 
 
 async def get_bot_user_ids(query):
     bot: Bot = query.bot
     user_id = query.from_user.id
+    update_last_activity(user_id)
     return bot, user_id
 
 

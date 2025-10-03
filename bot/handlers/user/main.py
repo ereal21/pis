@@ -14,19 +14,46 @@ from aiogram import Dispatcher
 from aiogram.types import Message, CallbackQuery, ChatType, InlineKeyboardMarkup, InlineKeyboardButton
 
 from bot.database.methods import (
-    select_max_role_id, create_user, check_role, check_user,
-    get_all_categories, get_all_items, select_bought_items, get_bought_item_info, get_item_info,
-    select_item_values_amount, get_user_balance, get_item_value, buy_item, add_bought_item, buy_item_for_balance,
-    select_user_operations, select_user_items, start_operation,
-    select_unfinished_operations, get_user_referral, finish_operation, update_balance, create_operation,
-    bought_items_list, check_value, get_subcategories, get_category_parent, get_user_language, update_user_language,
-    get_unfinished_operation, get_promocode
+    select_max_role_id,
+    create_user,
+    check_role,
+    check_user,
+    get_all_categories,
+    get_all_items,
+    select_bought_items,
+    get_bought_item_info,
+    get_item_info,
+    select_item_values_amount,
+    get_user_balance,
+    get_item_value,
+    buy_item,
+    add_bought_item,
+    buy_item_for_balance,
+    select_user_operations,
+    select_user_items,
+    start_operation,
+    select_unfinished_operations,
+    get_user_referral,
+    finish_operation,
+    update_balance,
+    create_operation,
+    bought_items_list,
+    check_value,
+    get_subcategories,
+    get_category_parent,
+    get_user_language,
+    update_user_language,
+    get_unfinished_operation,
+    get_promocode,
+    update_last_activity,
+    create_pending_purchase,
+    get_pending_purchase,
+    delete_pending_purchase,
 )
 from bot.handlers.other import get_bot_user_ids, get_bot_info
 from bot.keyboards import (
     main_menu, categories_list, goods_list, subcategories_list, user_items_list, back, item_info,
-    profile, rules, payment_menu, close, crypto_choice, crypto_invoice_menu, confirm_cancel,
-    confirm_purchase_menu)
+    profile, rules, payment_menu, close, crypto_choice, crypto_invoice_menu, confirm_purchase_menu)
 from bot.localization import t
 from bot.logger_mesh import logger
 from bot.misc import TgConfig, EnvKeys
@@ -78,6 +105,7 @@ async def start(message: Message):
     user_role = owner if str(user_id) == EnvKeys.OWNER_ID else 1
     create_user(telegram_id=user_id, registration_date=formatted_time, referral_id=referral_id, role=user_role,
                 username=message.from_user.username)
+    update_last_activity(user_id, formatted_time)
     role_data = check_role(user_id)
     user_db = check_user(user_id)
 
@@ -273,6 +301,209 @@ def home_markup(lang: str = 'en'):
         InlineKeyboardButton(t(lang, 'back_home'), callback_data="home_menu")
     )
 
+
+async def _send_purchased_item(
+    bot,
+    chat_id: int,
+    user_id: int,
+    buyer_display: str,
+    item_name: str,
+    item_info: dict,
+    value_data: dict,
+    item_price: float,
+    formatted_time: str,
+    purchases_before: int,
+    new_balance: float,
+    lang: str,
+    message_id: int | None,
+    back_target: str | None,
+    show_home: bool,
+):
+    purchases = purchases_before + 1
+    parent_cat = get_category_parent(item_info['category_name'])
+    photo_desc = ''
+    file_path = None
+
+    if os.path.isfile(value_data['value']):
+        desc_file = f"{value_data['value']}.txt"
+        if os.path.isfile(desc_file):
+            with open(desc_file) as f:
+                photo_desc = f.read()
+        with open(value_data['value'], 'rb') as media:
+            caption = (
+                f'✅ Item purchased. <b>Balance</b>: <i>{new_balance}</i>€\n'
+                f'📦 Purchases: {purchases}'
+            )
+            if photo_desc:
+                caption += f'\n\n{photo_desc}'
+            if value_data['value'].endswith('.mp4'):
+                await bot.send_video(
+                    chat_id=chat_id,
+                    video=media,
+                    caption=caption,
+                    parse_mode='HTML',
+                )
+            else:
+                await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=media,
+                    caption=caption,
+                    parse_mode='HTML',
+                )
+        sold_folder = os.path.join(os.path.dirname(value_data['value']), 'Sold')
+        os.makedirs(sold_folder, exist_ok=True)
+        file_path = os.path.join(sold_folder, os.path.basename(value_data['value']))
+        shutil.move(value_data['value'], file_path)
+        if os.path.isfile(desc_file):
+            shutil.move(desc_file, os.path.join(sold_folder, os.path.basename(desc_file)))
+
+        log_path = os.path.join('assets', 'purchases.txt')
+        with open(log_path, 'a') as log_file:
+            log_file.write(
+                f"{formatted_time} user:{user_id} item:{item_name} price:{item_price}\n"
+            )
+
+        if message_id is not None:
+            reply_markup = back(back_target) if back_target else None
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=f'✅ Item purchased. 📦 Total Purchases: {purchases}',
+                reply_markup=reply_markup,
+            )
+        elif show_home:
+            await bot.send_message(
+                chat_id,
+                f'✅ Item purchased. 📦 Total Purchases: {purchases}',
+                reply_markup=home_markup(lang),
+            )
+
+        cleanup_item_file(value_data['value'])
+        if os.path.isfile(desc_file):
+            cleanup_item_file(desc_file)
+    else:
+        text = (
+            f'✅ Item purchased. <b>Balance</b>: <i>{new_balance}</i>€\n'
+            f'📦 Purchases: {purchases}\n\n{value_data["value"]}'
+        )
+        if message_id is not None:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                parse_mode='HTML',
+                reply_markup=home_markup(lang),
+            )
+        else:
+            markup = home_markup(lang) if show_home else None
+            await bot.send_message(
+                chat_id,
+                text,
+                parse_mode='HTML',
+                reply_markup=markup,
+            )
+        photo_desc = value_data['value']
+
+    await notify_owner_of_purchase(
+        bot,
+        buyer_display,
+        formatted_time,
+        value_data['item_name'],
+        item_price,
+        parent_cat,
+        item_info['category_name'],
+        photo_desc,
+        file_path,
+    )
+
+    user_info = await bot.get_chat(user_id)
+    logger.info(
+        "User %s (%s) bought 1 item of %s for %s€",
+        user_id,
+        user_info.first_name,
+        value_data['item_name'],
+        item_price,
+    )
+
+
+async def perform_purchase(
+    bot,
+    user_id: int,
+    buyer_display: str,
+    item_name: str,
+    item_price: float,
+    *,
+    use_balance: bool,
+    chat_id: int | None = None,
+    message_id: int | None = None,
+    back_target: str | None = None,
+    show_home: bool = False,
+    lang: str | None = None,
+) -> str:
+    chat_id = chat_id or user_id
+    lang = lang or get_user_language(user_id) or 'en'
+    item_info = get_item_info(item_name)
+    markup = back(back_target) if back_target else home_markup(lang)
+
+    if not item_info:
+        if message_id is not None:
+            await bot.edit_message_text(
+                '❌ Item not found',
+                chat_id=chat_id,
+                message_id=message_id,
+                reply_markup=markup,
+            )
+        else:
+            await bot.send_message(chat_id, '❌ Item not found', reply_markup=markup)
+        return 'not_found'
+
+    purchases_before = select_user_items(user_id)
+    value_data = get_item_value(item_name)
+    if not value_data:
+        if use_balance:
+            text = '❌ Item out of stock'
+        else:
+            update_balance(user_id, item_price)
+            text = t(lang, 'purchase_refunded', amount=item_price)
+        if message_id is not None:
+            await bot.edit_message_text(
+                text,
+                chat_id=chat_id,
+                message_id=message_id,
+                reply_markup=markup,
+            )
+        else:
+            await bot.send_message(chat_id, text, reply_markup=markup)
+        return 'out_of_stock'
+
+    buy_item(value_data['id'], value_data['is_infinity'])
+    current_time = datetime.datetime.utcnow() + datetime.timedelta(hours=3)
+    formatted_time = current_time.strftime("%Y-%m-%d %H:%M:%S")
+    if use_balance:
+        new_balance = buy_item_for_balance(user_id, item_price)
+    else:
+        new_balance = get_user_balance(user_id)
+    add_bought_item(value_data['item_name'], value_data['value'], item_price, user_id, formatted_time)
+
+    await _send_purchased_item(
+        bot,
+        chat_id,
+        user_id,
+        buyer_display,
+        item_name,
+        item_info,
+        value_data,
+        item_price,
+        formatted_time,
+        purchases_before,
+        new_balance,
+        lang,
+        message_id,
+        back_target,
+        show_home,
+    )
+    return 'ok'
+
 async def confirm_buy_callback_handler(call: CallbackQuery):
     """Show confirmation menu before purchasing an item."""
     item_name = call.data[len('confirm_'):]
@@ -287,7 +518,11 @@ async def confirm_buy_callback_handler(call: CallbackQuery):
     TgConfig.STATE[user_id] = None
     TgConfig.STATE[f'{user_id}_pending_item'] = item_name
     TgConfig.STATE[f'{user_id}_price'] = price
-    text = t(lang, 'confirm_purchase', item=display_name(item_name), price=price)
+    TgConfig.STATE[f'{user_id}_original_price'] = price
+    TgConfig.STATE.pop(f'{user_id}_promo_applied', None)
+    TgConfig.STATE.pop(f'{user_id}_promo_code', None)
+    TgConfig.STATE.pop(f'{user_id}_crypto_purchase', None)
+    text = t(lang, 'confirm_purchase', item=display_name(item_name), price=f'{price:.2f}')
     await bot.edit_message_text(
         chat_id=call.message.chat.id,
         message_id=call.message.message_id,
@@ -318,12 +553,25 @@ async def process_promo_code(message: Message):
     message_id = TgConfig.STATE.get(f'{user_id}_message_id')
     lang = get_user_language(user_id) or 'en'
     await bot.delete_message(chat_id=message.chat.id, message_id=message.message_id)
+    if TgConfig.STATE.get(f'{user_id}_promo_applied'):
+        text = t(lang, 'promo_already_applied')
+        await bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=message_id,
+            text=text,
+            reply_markup=confirm_purchase_menu(item_name, lang),
+        )
+        TgConfig.STATE[user_id] = None
+        return
     promo = get_promocode(code)
     if promo and (not promo['expires_at'] or datetime.datetime.strptime(promo['expires_at'], '%Y-%m-%d') >= datetime.datetime.now()):
         discount = promo['discount']
-        new_price = round(price * (100 - discount) / 100, 2)
+        base_price = TgConfig.STATE.get(f'{user_id}_original_price', price)
+        new_price = round(base_price * (100 - discount) / 100, 2)
         TgConfig.STATE[f'{user_id}_price'] = new_price
-        text = t(lang, 'promo_applied', price=new_price)
+        TgConfig.STATE[f'{user_id}_promo_applied'] = True
+        TgConfig.STATE[f'{user_id}_promo_code'] = code
+        text = t(lang, 'promo_applied', price=f'{new_price:.2f}')
     else:
         text = t(lang, 'promo_invalid')
     await bot.edit_message_text(
@@ -334,131 +582,117 @@ async def process_promo_code(message: Message):
     )
     TgConfig.STATE[user_id] = None
 
-async def buy_item_callback_handler(call: CallbackQuery):
-    item_name = call.data[4:]
+async def buy_item_balance_handler(call: CallbackQuery):
+    item_name = call.data[len('buybalance_'):]
     bot, user_id = await get_bot_user_ids(call)
     msg = call.message.message_id
-    item_info_list = get_item_info(item_name)
-    item_price = TgConfig.STATE.get(f'{user_id}_price', item_info_list["price"])
-    user_balance = get_user_balance(user_id)
-    purchases_before = select_user_items(user_id)
-
-    if user_balance >= item_price:
-        value_data = get_item_value(item_name)
-
-        if value_data:
-            # remove from stock immediately
-            buy_item(value_data['id'], value_data['is_infinity'])
-
-            current_time = datetime.datetime.utcnow() + datetime.timedelta(hours=3)
-            formatted_time = current_time.strftime("%Y-%m-%d %H:%M:%S")
-            new_balance = buy_item_for_balance(user_id, item_price)
-            purchase_id = add_bought_item(value_data['item_name'], value_data['value'], item_price, user_id, formatted_time)
-            purchases = purchases_before + 1
-
-            username = (
-                f'@{call.from_user.username}'
-                if call.from_user.username
-                else call.from_user.full_name
-            )
-            parent_cat = get_category_parent(item_info_list['category_name'])
-
-            photo_desc = ''
-            file_path = None
-            if os.path.isfile(value_data['value']):
-                desc_file = f"{value_data['value']}.txt"
-                if os.path.isfile(desc_file):
-                    with open(desc_file) as f:
-                        photo_desc = f.read()
-                with open(value_data['value'], 'rb') as media:
-                    caption = (
-                        f'✅ Item purchased. <b>Balance</b>: <i>{new_balance}</i>€\n'
-                        f'📦 Purchases: {purchases}'
-                    )
-                    if photo_desc:
-                        caption += f'\n\n{photo_desc}'
-                    if value_data['value'].endswith('.mp4'):
-                        await bot.send_video(
-                            chat_id=call.message.chat.id,
-                            video=media,
-                            caption=caption,
-                            parse_mode='HTML'
-                        )
-                    else:
-                        await bot.send_photo(
-                            chat_id=call.message.chat.id,
-                            photo=media,
-                            caption=caption,
-                            parse_mode='HTML'
-                        )
-                sold_folder = os.path.join(os.path.dirname(value_data['value']), 'Sold')
-                os.makedirs(sold_folder, exist_ok=True)
-                file_path = os.path.join(sold_folder, os.path.basename(value_data['value']))
-                shutil.move(value_data['value'], file_path)
-                if os.path.isfile(desc_file):
-                    shutil.move(desc_file, os.path.join(sold_folder, os.path.basename(desc_file)))
-                log_path = os.path.join('assets', 'purchases.txt')
-                with open(log_path, 'a') as log_file:
-                    log_file.write(f"{formatted_time} user:{user_id} item:{item_name} price:{item_price}\n")
-
-                await bot.edit_message_text(
-                    chat_id=call.message.chat.id,
-                    message_id=msg,
-                    text=f'✅ Item purchased. 📦 Total Purchases: {purchases}',
-                    reply_markup=back(f'item_{item_name}')
-                )
-
-                cleanup_item_file(value_data['value'])
-                if os.path.isfile(desc_file):
-                    cleanup_item_file(desc_file)
-            else:
-                text = (
-                    f'✅ Item purchased. <b>Balance</b>: <i>{new_balance}</i>€\n'
-                    f'📦 Purchases: {purchases}\n\n{value_data["value"]}'
-                )
-                await bot.edit_message_text(
-                    chat_id=call.message.chat.id,
-                    message_id=msg,
-                    text=text,
-                    parse_mode='HTML',
-                    reply_markup=home_markup(get_user_language(user_id) or 'en')
-                )
-                photo_desc = value_data['value']
-
-            await notify_owner_of_purchase(
-                bot,
-                username,
-                formatted_time,
-                value_data['item_name'],
-                item_price,
-                parent_cat,
-                item_info_list['category_name'],
-                photo_desc,
-                file_path,
-            )
-
-            user_info = await bot.get_chat(user_id)
-            logger.info(f"User {user_id} ({user_info.first_name})"
-                        f" bought 1 item of {value_data['item_name']} for {item_price}€")
-            lang = get_user_language(user_id) or 'en'
-            TgConfig.STATE.pop(f'{user_id}_pending_item', None)
-            TgConfig.STATE.pop(f'{user_id}_price', None)
-            return
-
-        await bot.edit_message_text(chat_id=call.message.chat.id,
-                                    message_id=msg,
-                                    text='❌ Item out of stock',
-                                    reply_markup=back(f'item_{item_name}'))
-        TgConfig.STATE.pop(f'{user_id}_pending_item', None)
-        TgConfig.STATE.pop(f'{user_id}_price', None)
+    item_info = get_item_info(item_name)
+    if not item_info:
+        await call.answer('❌ Item not found', show_alert=True)
         return
 
-    await bot.edit_message_text(chat_id=call.message.chat.id,
-                                message_id=msg,
-                                text='❌ Insufficient funds',
-                                reply_markup=back(f'item_{item_name}'))
-    TgConfig.STATE.pop(f'{user_id}_pending_item', None)
-    TgConfig.STATE.pop(f'{user_id}_price', None)
+    lang = get_user_language(user_id) or 'en'
+    item_price = TgConfig.STATE.get(f'{user_id}_price', item_info["price"])
+    user_balance = get_user_balance(user_id)
+
+    if user_balance >= item_price:
+        buyer_display = (
+            f'@{call.from_user.username}'
+            if call.from_user.username
+            else call.from_user.full_name
+        )
+        await perform_purchase(
+            bot,
+            user_id,
+            buyer_display,
+            item_name,
+            item_price,
+            use_balance=True,
+            chat_id=call.message.chat.id,
+            message_id=msg,
+            back_target=f'item_{item_name}',
+            lang=lang,
+        )
+    else:
+        await bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=msg,
+            text='❌ Insufficient funds',
+            reply_markup=back(f'item_{item_name}'),
+        )
+
+    for key in (
+        f'{user_id}_pending_item',
+        f'{user_id}_price',
+        f'{user_id}_original_price',
+        f'{user_id}_promo_applied',
+        f'{user_id}_promo_code',
+        f'{user_id}_message_id',
+    ):
+        TgConfig.STATE.pop(key, None)
+
+
+async def initiate_crypto_purchase(call: CallbackQuery):
+    item_name = call.data[len('buycrypto_'):]
+    bot, user_id = await get_bot_user_ids(call)
+    info = get_item_info(item_name)
+    if not info:
+        await call.answer('❌ Item not found', show_alert=True)
+        return
+
+    lang = get_user_language(user_id) or 'en'
+    price = TgConfig.STATE.get(f'{user_id}_price', info['price'])
+    TgConfig.STATE[f'{user_id}_amount'] = str(price)
+    TgConfig.STATE[f'{user_id}_crypto_purchase'] = {
+        'item': item_name,
+        'price': price,
+    }
+    text = t(
+        lang,
+        'choose_crypto_method',
+        item=display_name(item_name),
+        price=f'{price:.2f}',
+    )
+    markup = crypto_choice(f'confirm_{item_name}')
+    await bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text=text,
+        reply_markup=markup,
+    )
+
+
+async def complete_crypto_purchase(
+    bot,
+    user_id: int,
+    item_name: str,
+    price: float,
+    *,
+    lang: str | None = None,
+    chat_id: int | None = None,
+):
+    try:
+        buyer_chat = await bot.get_chat(user_id)
+    except Exception:
+        logger.exception("Failed to fetch chat info for user %s", user_id)
+        buyer_display = str(user_id)
+    else:
+        buyer_display = (
+            f'@{buyer_chat.username}'
+            if buyer_chat.username
+            else buyer_chat.full_name
+        )
+    await perform_purchase(
+        bot,
+        user_id,
+        buyer_display,
+        item_name,
+        price,
+        use_balance=False,
+        chat_id=chat_id or user_id,
+        show_home=True,
+        lang=lang,
+    )
 
 # Home button callback handler
 async def process_home_menu(call: CallbackQuery):
@@ -616,7 +850,7 @@ async def process_replenish_balance(message: Message):
         return
 
     TgConfig.STATE[f'{user_id}_amount'] = text
-    markup = crypto_choice()
+    markup = crypto_choice('replenish_balance')
     await bot.edit_message_text(chat_id=message.chat.id,
                                 message_id=message_id,
                                 text=f'💵 Top-up amount: {text}€. Choose payment method:',
@@ -656,6 +890,7 @@ async def crypto_payment(call: CallbackQuery):
     bot, user_id = await get_bot_user_ids(call)
     currency = call.data.split('_')[1]
     amount = TgConfig.STATE.pop(f'{user_id}_amount', None)
+    purchase_data = TgConfig.STATE.pop(f'{user_id}_crypto_purchase', None)
     if not amount:
         await call.answer(text='❌ Invoice not found')
         return
@@ -676,6 +911,12 @@ async def crypto_payment(call: CallbackQuery):
         address=address,
         expires_at=expires_at,
     )
+    if purchase_data:
+        text += "\n\n" + t(
+            lang,
+            'purchase_invoice_hint',
+            item=display_name(purchase_data['item']),
+        )
 
     # Generate QR code for the address
     qr = qrcode.make(address)
@@ -692,6 +933,23 @@ async def crypto_payment(call: CallbackQuery):
         reply_markup=markup,
     )
     start_operation(user_id, amount, payment_id, sent.message_id)
+    if purchase_data:
+        create_pending_purchase(
+            user_id,
+            payment_id,
+            purchase_data['item'],
+            purchase_data['price'],
+            sent.message_id,
+        )
+        for key in (
+            f'{user_id}_pending_item',
+            f'{user_id}_price',
+            f'{user_id}_original_price',
+            f'{user_id}_promo_applied',
+            f'{user_id}_promo_code',
+            f'{user_id}_message_id',
+        ):
+            TgConfig.STATE.pop(key, None)
     await asyncio.sleep(sleep_time)
     info = get_unfinished_operation(payment_id)
     if info:
@@ -699,6 +957,7 @@ async def crypto_payment(call: CallbackQuery):
         status = await check_payment(payment_id)
         if status not in ('finished', 'confirmed', 'sending'):
             finish_operation(payment_id)
+            delete_pending_purchase(payment_id)
             await bot.send_message(user_id, t(lang, 'invoice_cancelled'))
 
 
@@ -709,7 +968,7 @@ async def checking_payment(call: CallbackQuery):
     info = get_unfinished_operation(label)
 
     if info:
-        user_id_db, operation_value, _ = info
+        user_id_db, operation_value, stored_message_id = info
         payment_status = await check_payment_status(label)
         if payment_status is None:
             payment_status = await check_payment(label)
@@ -718,6 +977,42 @@ async def checking_payment(call: CallbackQuery):
             current_time = datetime.datetime.now()
             formatted_time = current_time.strftime("%Y-%m-%d %H:%M:%S")
             referral_id = get_user_referral(user_id)
+            lang = get_user_language(user_id) or 'en'
+            pending = get_pending_purchase(label)
+
+            if pending:
+                invoice_message_id = pending.get('message_id') or stored_message_id or message_id
+                if invoice_message_id:
+                    try:
+                        await bot.delete_message(
+                            chat_id=call.message.chat.id,
+                            message_id=invoice_message_id,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to delete crypto invoice %s for user %s: %s",
+                            label,
+                            user_id,
+                            exc,
+                        )
+                try:
+                    await complete_crypto_purchase(
+                        bot,
+                        user_id,
+                        pending['item_name'],
+                        pending['price'],
+                        lang=lang,
+                        chat_id=call.message.chat.id,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to fulfill crypto purchase for payment %s", label
+                    )
+                    return
+                delete_pending_purchase(label)
+                finish_operation(label)
+                return
+
             finish_operation(label)
 
             if referral_id and TgConfig.REFERRAL_PERCENT != 0:
@@ -750,37 +1045,41 @@ async def cancel_payment(call: CallbackQuery):
     bot, user_id = await get_bot_user_ids(call)
     invoice_id = call.data.split('_', 1)[1]
     lang = get_user_language(user_id) or 'en'
-    if get_unfinished_operation(invoice_id):
-        await bot.edit_message_text(
-            'Are you sure you want to cancel payment?',
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            reply_markup=confirm_cancel(invoice_id, lang),
-        )
-    else:
+    info = get_unfinished_operation(invoice_id)
+    if not info:
         await call.answer(text='❌ Invoice not found')
+        return
 
+    pending = get_pending_purchase(invoice_id)
+    _, _, stored_message_id = info
+    finish_operation(invoice_id)
+    if pending:
+        delete_pending_purchase(invoice_id)
 
-async def confirm_cancel_payment(call: CallbackQuery):
-    bot, user_id = await get_bot_user_ids(call)
-    invoice_id = call.data.split('_', 2)[2]
-    lang = get_user_language(user_id) or 'en'
-    if get_unfinished_operation(invoice_id):
-        finish_operation(invoice_id)
-        role = check_role(user_id)
-        user = check_user(user_id)
-        balance = user.balance if user else 0
-        purchases = select_user_items(user_id)
-        markup = main_menu(role, TgConfig.REVIEWS_URL, TgConfig.PRICE_LIST_URL, lang)
-        text = build_menu_text(call.from_user, balance, purchases, lang)
-        await bot.edit_message_text(
-            t(lang, 'invoice_cancelled'),
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-        )
-        await bot.send_message(user_id, text, reply_markup=markup)
-    else:
-        await call.answer(text='❌ Invoice not found')
+    invoice_message_id = (
+        pending.get('message_id') if pending else None
+    ) or stored_message_id or call.message.message_id
+    if invoice_message_id:
+        try:
+            await bot.delete_message(
+                chat_id=call.message.chat.id,
+                message_id=invoice_message_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to delete invoice %s for user %s: %s",
+                invoice_id,
+                user_id,
+                exc,
+            )
+    role = check_role(user_id)
+    user = check_user(user_id)
+    balance = user.balance if user else 0
+    purchases = select_user_items(user_id)
+    markup = main_menu(role, TgConfig.REVIEWS_URL, TgConfig.PRICE_LIST_URL, lang)
+    text = build_menu_text(call.from_user, balance, purchases, lang)
+    await bot.send_message(user_id, t(lang, 'invoice_cancelled'))
+    await bot.send_message(user_id, text, reply_markup=markup)
 
 
 async def check_sub_to_channel(call: CallbackQuery):
@@ -790,6 +1089,7 @@ async def check_sub_to_channel(call: CallbackQuery):
     lang = get_user_language(user_id) or 'en'
     if get_unfinished_operation(invoice_id):
         finish_operation(invoice_id)
+        delete_pending_purchase(invoice_id)
         await bot.edit_message_text(
             t(lang, 'invoice_cancelled'),
             chat_id=call.message.chat.id,
@@ -890,16 +1190,16 @@ def register_user_handlers(dp: Dispatcher):
                                        lambda c: c.data.startswith('confirm_'), state='*')
     dp.register_callback_query_handler(apply_promo_callback_handler,
                                        lambda c: c.data.startswith('applypromo_'), state='*')
-    dp.register_callback_query_handler(buy_item_callback_handler,
-                                       lambda c: c.data.startswith('buy_'), state='*')
+    dp.register_callback_query_handler(buy_item_balance_handler,
+                                       lambda c: c.data.startswith('buybalance_'), state='*')
+    dp.register_callback_query_handler(initiate_crypto_purchase,
+                                       lambda c: c.data.startswith('buycrypto_'), state='*')
     dp.register_callback_query_handler(pay_yoomoney,
                                        lambda c: c.data == 'pay_yoomoney', state='*')
     dp.register_callback_query_handler(crypto_payment,
                                        lambda c: c.data.startswith('crypto_'), state='*')
     dp.register_callback_query_handler(cancel_payment,
                                        lambda c: c.data.startswith('cancel_'), state='*')
-    dp.register_callback_query_handler(confirm_cancel_payment,
-                                       lambda c: c.data.startswith('confirm_cancel_'), state='*')
     dp.register_callback_query_handler(checking_payment,
                                        lambda c: c.data.startswith('check_'), state='*')
     dp.register_callback_query_handler(process_home_menu,

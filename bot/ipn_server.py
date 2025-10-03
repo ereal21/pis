@@ -16,7 +16,10 @@ from bot.database.methods import (
     update_balance,
     get_user_referral,
     get_user_language,
+    get_pending_purchase,
+    delete_pending_purchase,
 )
+from bot.handlers.user.main import complete_crypto_purchase
 from bot.logger_mesh import logger
 
 app = Flask(__name__)
@@ -59,7 +62,47 @@ def nowpayments_ipn():
             value = record.operation_value
             user_id = record.user_id
             message_id = record.message_id
-            finish_operation(payment_id)
+            pending = get_pending_purchase(payment_id)
+            if pending:
+                bot = Bot(token=EnvKeys.TOKEN, parse_mode="HTML")
+                lang = get_user_language(user_id) or 'en'
+                invoice_message_id = pending.get('message_id') or message_id
+                if invoice_message_id:
+                    try:
+                        asyncio.run(
+                            bot.delete_message(
+                                chat_id=user_id,
+                                message_id=invoice_message_id,
+                            )
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to delete crypto invoice %s for user %s: %s",
+                            payment_id,
+                            user_id,
+                            exc,
+                        )
+                try:
+                    asyncio.run(
+                        complete_crypto_purchase(
+                            bot,
+                            user_id,
+                            pending['item_name'],
+                            pending['price'],
+                            lang=lang,
+                            chat_id=user_id,
+                        )
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to fulfill crypto purchase for payment %s",
+                        payment_id,
+                    )
+                    return "", 200
+                delete_pending_purchase(payment_id)
+                finish_operation(payment_id)
+                return "", 200
+
             formatted_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             create_operation(user_id, value, formatted_time)
             update_balance(user_id, value)
