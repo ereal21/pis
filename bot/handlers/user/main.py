@@ -1015,6 +1015,21 @@ async def checking_payment(call: CallbackQuery):
 
             finish_operation(label)
 
+            if pending:
+                try:
+                    await bot.delete_message(chat_id=call.message.chat.id, message_id=message_id)
+                except Exception:
+                    pass
+                await complete_crypto_purchase(
+                    bot,
+                    user_id,
+                    pending['item_name'],
+                    pending['price'],
+                    lang=lang,
+                    chat_id=call.message.chat.id,
+                )
+                return
+
             if referral_id and TgConfig.REFERRAL_PERCENT != 0:
                 referral_percent = TgConfig.REFERRAL_PERCENT
                 referral_operation = round((referral_percent/100) * operation_value)
